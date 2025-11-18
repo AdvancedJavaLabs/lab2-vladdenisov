@@ -1,0 +1,93 @@
+version: "3.9"
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: redpanda
+    command: >
+      redpanda start
+      --overprovisioned
+      --smp 1
+      --memory 1024M
+      --reserve-memory 0M
+      --node-id 0
+      --check=false
+      --kafka-addr PLAINTEXT://0.0.0.0:9092,OUTSIDE://0.0.0.0:19092
+      --advertise-kafka-addr PLAINTEXT://redpanda:9092,OUTSIDE://localhost:19092
+      --pandaproxy-addr 0.0.0.0:8082
+      --advertise-pandaproxy-addr redpanda:8082
+      --rpc-addr 0.0.0.0:33145
+      --advertise-rpc-addr redpanda:33145
+      --set redpanda.auto_create_topics_enabled=true
+    ports:
+      - "9092:9092" 
+      - "19092:19092"
+      - "9644:9644"
+      - "8082:8082"   
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+
+  console:
+    image: redpandadata/console:latest
+    container_name: redpanda-console
+    depends_on:
+      - redpanda
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - REDPANDA_ADMIN_API=http://redpanda:9644
+      - CONSOLE_ANALYTICS_ENABLED=false
+    ports:
+      - "8080:8080"   
+
+  init-topics:
+    image: redpandadata/redpanda:latest
+    depends_on:
+      - redpanda
+    entrypoint: ["/bin/sh","-c"]
+    command: >
+      "rpk cluster info --brokers=redpanda:9092 && 
+       rpk topic create text-chunks text-chunks-results
+       --brokers=redpanda:9092 --partitions=12 --replicas=1 || true"
+    restart: "no"
+
+  worker:
+    build:
+      context: ./services/pyworker
+      dockerfile: Dockerfile
+    depends_on:
+      - redpanda
+    working_dir: /app
+    deploy:
+      replicas: 16
+    volumes:
+      - ./services/pyworker:/app
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - SOURCE_TOPIC=text-chunks
+      - RESULT_TOPIC=text-chunks-results
+      - TOP_N=10
+      - CONSUMER_GROUP=text-worker-group
+      - PYTHONUNBUFFERED=1
+
+
+  aggregator:
+    image: golang:1.23-alpine
+    depends_on:
+      - redpanda
+    working_dir: /app
+    volumes:
+      - ./services/aggregator:/app
+    environment:
+      - KAFKA_BROKERS=redpanda:9092
+      - RESULT_TOPIC=text-chunks-results
+      - TOP_N=10
+      - OUTPUT_FILE=/app/results.json
+      - IDLE_SECONDS=30
+    command: ["go", "run", "."]
+
+volumes:
+  redpanda-data:

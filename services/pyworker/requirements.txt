@@ -1,0 +1,7 @@
+nltk==3.9.1
+kafka-python-ng==2.2.3
+python-snappy==0.7.3
+spacy==3.8.11
+
+
+
